@@ -8,7 +8,6 @@
  * - Quality normalization (480p, 720p, 1080p, 2160p, etc.)
  * - User session quota management
  * - TMDB metadata resolution as fallback
- * - Duplicate removal (one stream per quality) and quality-based sorting
  */
 
 const PROVIDER_NAME = 'CinemM';
@@ -534,6 +533,8 @@ function normalizeQuality(quality) {
  * @returns {array} Deduplicated streams (one per quality)
  */
 function deduplicateStreams(streams) {
+  if (!streams || !Array.isArray(streams)) return [];
+  
   const qualityMap = {};
 
   for (let i = 0; i < streams.length; i++) {
@@ -549,7 +550,9 @@ function deduplicateStreams(streams) {
   // Convert map back to array
   const unique = [];
   for (const quality in qualityMap) {
-    unique.push(qualityMap[quality]);
+    if (qualityMap.hasOwnProperty(quality)) {
+      unique.push(qualityMap[quality]);
+    }
   }
 
   return unique;
@@ -561,6 +564,8 @@ function deduplicateStreams(streams) {
  * @returns {array} Sorted streams
  */
 function sortByQuality(streams) {
+  if (!streams || !Array.isArray(streams)) return [];
+  
   return streams.sort((a, b) => {
     const rankA = QUALITY_RANKING[a.quality] || 0;
     const rankB = QUALITY_RANKING[b.quality] || 0;
@@ -600,11 +605,11 @@ function formatStreamDescription(stream) {
 
   // First line: Title and metadata
   if (stream.title) {
-    parts.push(`🎬 ${stream.title}`);
-    
+    let firstLine = `🎬 ${stream.title}`;
     if (stream.year) {
-      parts[0] += ` ${stream.year}`;
+      firstLine += ` ${stream.year}`;
     }
+    parts.push(firstLine);
   }
 
   // Second line: Quality and codec info
@@ -732,7 +737,8 @@ async function getStreams(id, type, season, episode) {
 
     const tmdbInfo = await getTMDBInfo(id, isTV);
     if (!tmdbInfo || !tmdbInfo.title) {
-      return console.error(`[${PROVIDER_NAME}] Could not resolve media info`), [];
+      console.error(`[${PROVIDER_NAME}] Could not resolve media info`);
+      return [];
     }
 
     console.log(`[${PROVIDER_NAME}] Resolved: ${tmdbInfo.title} (ID:${tmdbInfo.id})`);
@@ -742,17 +748,19 @@ async function getStreams(id, type, season, episode) {
 
     const resetCookie = await resetQuota();
     if (!resetCookie) {
-      return console.error(`[${PROVIDER_NAME}] Failed to get quota`), [];
+      console.error(`[${PROVIDER_NAME}] Failed to get quota`);
+      return [];
     }
 
     const searchResults = await searchCineMM(tmdbInfo.title, typeValue, resetCookie);
     if (!searchResults || searchResults.length === 0) {
-      return console.error(`[${PROVIDER_NAME}] No results for: ${tmdbInfo.title}`), [];
+      console.error(`[${PROVIDER_NAME}] No results for: ${tmdbInfo.title}`);
+      return [];
     }
 
     for (let i = 0; i < searchResults.length; i++) {
       const result = searchResults[i];
-      const resultScore = similarity(tmdbInfo.title, result.name, typeStr);
+      let resultScore = similarity(tmdbInfo.title, result.name, typeStr);
       const yearMatch = tmdbInfo.year && result.year && parseInt(tmdbInfo.year) !== parseInt(result.year);
 
       if (yearMatch && tmdbInfo.year && result.year && Math.abs(parseInt(tmdbInfo.year) - parseInt(result.year)) > 2) {
@@ -766,7 +774,8 @@ async function getStreams(id, type, season, episode) {
     }
 
     if (!bestMatch) {
-      return console.error(`[${PROVIDER_NAME}] No match found (Score threshold: 0.4)`), [];
+      console.error(`[${PROVIDER_NAME}] No match found (Score threshold: 0.4)`);
+      return [];
     }
 
     console.log(
@@ -778,7 +787,8 @@ async function getStreams(id, type, season, episode) {
     if (isTV) {
       const seriesDetails = await getSeriesDetails(bestMatch.id, resetCookie);
       if (!seriesDetails || !seriesDetails.seasons) {
-        return console.error(`[${PROVIDER_NAME}] Could not fetch series details`), [];
+        console.error(`[${PROVIDER_NAME}] Could not fetch series details`);
+        return [];
       }
 
       let seasonId = null;
@@ -798,28 +808,33 @@ async function getStreams(id, type, season, episode) {
       }
 
       if (!seasonId) {
-        return console.log(`[${PROVIDER_NAME}] Season ${season} not found`), [];
+        console.log(`[${PROVIDER_NAME}] Season ${season} not found`);
+        return [];
       }
 
       console.log(`[${PROVIDER_NAME}] Episode: S${season}E${episode}`);
 
       let episodeId = null;
-      for (let i = 0; i < seriesDetails.seasons[seriesDetails.seasons.indexOf(seriesDetails.seasons.find(s => s.id === seasonId))].episodes.length; i++) {
-        if (seriesDetails.seasons[seriesDetails.seasons.indexOf(seriesDetails.seasons.find(s => s.id === seasonId))].episodes[i].episode_number === parseInt(episode)) {
-          episodeId = seriesDetails.seasons[seriesDetails.seasons.indexOf(seriesDetails.seasons.find(s => s.id === seasonId))].episodes[i].id;
-          break;
+      const seasonIndex = seriesDetails.seasons.findIndex(s => s.id === seasonId);
+      if (seasonIndex >= 0) {
+        for (let i = 0; i < seriesDetails.seasons[seasonIndex].episodes.length; i++) {
+          if (seriesDetails.seasons[seasonIndex].episodes[i].episode_number === parseInt(episode)) {
+            episodeId = seriesDetails.seasons[seasonIndex].episodes[i].id;
+            break;
+          }
+        }
+
+        if (!episodeId) {
+          const episodeIndex = parseInt(episode) - 1;
+          if (episodeIndex >= 0 && episodeIndex < seriesDetails.seasons[seasonIndex].episodes.length) {
+            episodeId = seriesDetails.seasons[seasonIndex].episodes[episodeIndex].id;
+          }
         }
       }
 
       if (!episodeId) {
-        const episodeIndex = parseInt(episode) - 1;
-        if (episodeIndex >= 0 && episodeIndex < seriesDetails.seasons[seriesDetails.seasons.indexOf(seriesDetails.seasons.find(s => s.id === seasonId))].episodes.length) {
-          episodeId = seriesDetails.seasons[seriesDetails.seasons.indexOf(seriesDetails.seasons.find(s => s.id === seasonId))].episodes[episodeIndex].id;
-        }
-      }
-
-      if (!episodeId) {
-        return console.log(`[${PROVIDER_NAME}] Episode ${episode} not found`), [];
+        console.log(`[${PROVIDER_NAME}] Episode ${episode} not found`);
+        return [];
       }
 
       console.log(`[${PROVIDER_NAME}] Fetching: ${episodeId} (S${season}E${episode})`);
@@ -835,9 +850,11 @@ async function getStreams(id, type, season, episode) {
       }
     }
 
-    return console.log(`[${PROVIDER_NAME}] Returned ${streams.length} streams`), streams;
+    console.log(`[${PROVIDER_NAME}] Returned ${streams.length} streams`);
+    return streams;
   } catch (error) {
-    return console.error(`[${PROVIDER_NAME}] Error: ${error.message}`), [];
+    console.error(`[${PROVIDER_NAME}] Error: ${error.message}`);
+    return [];
   }
 }
 
