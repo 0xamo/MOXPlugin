@@ -8,7 +8,7 @@
  * - Quality normalization (480p, 720p, 1080p, 2160p, etc.)
  * - User session quota management
  * - TMDB metadata resolution as fallback
- * - Duplicate removal (one stream per quality) and quality-based sorting
+ * - Duplicate removal and quality-based sorting
  */
 
 const PROVIDER_NAME = 'CinemM';
@@ -529,27 +529,20 @@ function normalizeQuality(quality) {
 }
 
 /**
- * Remove duplicate streams - keep only ONE per quality level (first server providing that quality)
+ * Remove duplicate streams based on URL
  * @param {array} streams - Stream array
- * @returns {array} Deduplicated streams (one per quality)
+ * @returns {array} Deduplicated streams
  */
 function deduplicateStreams(streams) {
-  const qualityMap = {};
+  const seen = {};
+  const unique = [];
 
   for (let i = 0; i < streams.length; i++) {
     const stream = streams[i];
-    const quality = stream.quality || 'HD';
-
-    // Keep only the first stream for each quality
-    if (!qualityMap[quality]) {
-      qualityMap[quality] = stream;
+    if (!seen[stream.url]) {
+      seen[stream.url] = true;
+      unique.push(stream);
     }
-  }
-
-  // Convert map back to array
-  const unique = [];
-  for (const quality in qualityMap) {
-    unique.push(qualityMap[quality]);
   }
 
   return unique;
@@ -698,20 +691,16 @@ function buildStreamsFromServers(servers, mediaInfo = {}) {
       }
     };
 
+    // Format name and description
+    streamObj.name = formatStreamName(streamObj);
+    streamObj.description = formatStreamDescription(streamObj);
+
     streams.push(streamObj);
   }
 
-  // Remove duplicates (one per quality), then sort by quality
+  // Remove duplicates and sort by quality
   const deduped = deduplicateStreams(streams);
-  const sorted = sortByQuality(deduped);
-
-  // Format names and descriptions after deduplication and sorting
-  for (let i = 0; i < sorted.length; i++) {
-    sorted[i].name = formatStreamName(sorted[i]);
-    sorted[i].description = formatStreamDescription(sorted[i]);
-  }
-
-  return sorted;
+  return sortByQuality(deduped);
 }
 
 /**
