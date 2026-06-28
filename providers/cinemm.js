@@ -8,6 +8,7 @@
  * - Quality normalization (480p, 720p, 1080p, 2160p, etc.)
  * - User session quota management
  * - TMDB metadata resolution as fallback
+ * - Comprehensive debug logging
  */
 
 const PROVIDER_NAME = 'CinemM';
@@ -42,6 +43,20 @@ const QUALITY_RANKING = {
 };
 
 /**
+ * Debug log wrapper
+ * @param {string} message - Message to log
+ * @param {*} data - Optional data to log
+ */
+function debugLog(message, data = null) {
+  const timestamp = new Date().toISOString().substr(11, 8);
+  if (data) {
+    console.log(`[${timestamp}] [${PROVIDER_NAME}] ${message}`, data);
+  } else {
+    console.log(`[${timestamp}] [${PROVIDER_NAME}] ${message}`);
+  }
+}
+
+/**
  * Fetch with timeout support
  * @param {string} url - URL to fetch
  * @param {object} options - Fetch options
@@ -51,6 +66,7 @@ const QUALITY_RANKING = {
 async function fetchWithTimeout(url, options, timeout = 15000) {
   timeout = timeout || 15000;
   try {
+    debugLog(`🌐 Fetching: ${url.substring(0, 100)}...`);
     const fetchOptions = options || {};
     if (!fetchOptions.headers) fetchOptions.headers = {};
 
@@ -59,8 +75,11 @@ async function fetchWithTimeout(url, options, timeout = 15000) {
       fetchOptions.signal = AbortSignal.timeout(timeout);
     }
 
-    return await fetch(url, fetchOptions);
+    const response = await fetch(url, fetchOptions);
+    debugLog(`✓ Response status: ${response.status}`);
+    return response;
   } catch (error) {
+    debugLog(`✗ Fetch error: ${error.message}`);
     if (error.name === 'AbortError' || error.message === 'TimeoutError') {
       throw new Error(`[${PROVIDER_NAME}] Timeout fetching: ${url.substring(0, 80)}`);
     }
@@ -75,14 +94,24 @@ async function fetchWithTimeout(url, options, timeout = 15000) {
  * @returns {object|null} Parsed JSON or null if not found
  */
 function tryExtractJsonValue(body, keyPath) {
+  debugLog(`🔍 Extracting JSON with key: ${keyPath}`);
+  
   const startIndex = body.indexOf(keyPath);
-  if (startIndex === -1) return null;
+  if (startIndex === -1) {
+    debugLog(`✗ Key not found in body`);
+    return null;
+  }
+
+  debugLog(`✓ Key found at index: ${startIndex}`);
 
   let currentIndex = startIndex + 2;
   if (currentIndex >= body.length) return null;
 
   const firstChar = body[currentIndex];
-  if (firstChar !== '[' && firstChar !== '{') return null;
+  if (firstChar !== '[' && firstChar !== '{') {
+    debugLog(`✗ Invalid JSON start char: ${firstChar}`);
+    return null;
+  }
 
   let bracketCount = 0;
   let inString = false;
@@ -120,12 +149,18 @@ function tryExtractJsonValue(body, keyPath) {
     }
   }
 
-  if (endIndex === -1) return null;
+  if (endIndex === -1) {
+    debugLog(`✗ Could not find JSON end`);
+    return null;
+  }
 
   try {
-    return JSON.parse(body.substring(currentIndex, endIndex));
+    const jsonStr = body.substring(currentIndex, endIndex);
+    const result = JSON.parse(jsonStr);
+    debugLog(`✓ JSON parsed successfully`, { type: typeof result, length: Array.isArray(result) ? result.length : 'object' });
+    return result;
   } catch (error) {
-    console.error(`[${PROVIDER_NAME}] JSON parse failed: ${error.message}`);
+    debugLog(`✗ JSON parse failed: ${error.message}`);
     return null;
   }
 }
@@ -139,7 +174,10 @@ function extractCookieFromHeaders(response) {
   try {
     if (response.headers && typeof response.headers.get === 'function') {
       const cookieHeader = (response.headers.get('set-cookie') || '').match(/user_uuid=([^;]+)/);
-      if (cookieHeader) return 'user_uuid=' + cookieHeader[1];
+      if (cookieHeader) {
+        debugLog(`✓ Cookie found in headers`);
+        return 'user_uuid=' + cookieHeader[1];
+      }
 
       if (response.headers && typeof response.headers.forEach === 'function') {
         let userUuidCookie = null;
@@ -149,7 +187,10 @@ function extractCookieFromHeaders(response) {
             if (match) userUuidCookie = 'user_uuid=' + match[1];
           }
         });
-        if (userUuidCookie) return userUuidCookie;
+        if (userUuidCookie) {
+          debugLog(`✓ Cookie found via forEach`);
+          return userUuidCookie;
+        }
       }
 
       if (response.headers && typeof response.headers.entries === 'object') {
@@ -157,18 +198,25 @@ function extractCookieFromHeaders(response) {
         if (Array.isArray(cookieArray)) {
           for (let i = 0; i < cookieArray.length; i++) {
             const match = cookieArray[i].match(/user_uuid=([^;]+)/);
-            if (match) return 'user_uuid=' + match[1];
+            if (match) {
+              debugLog(`✓ Cookie found in array`);
+              return 'user_uuid=' + match[1];
+            }
           }
         } else {
           const match = cookieArray.match(/user_uuid=([^;]+)/);
-          if (match) return 'user_uuid=' + match[1];
+          if (match) {
+            debugLog(`✓ Cookie found in string`);
+            return 'user_uuid=' + match[1];
+          }
         }
       }
     }
   } catch (error) {
-    console.error(`[${PROVIDER_NAME}] Cookie extraction failed: ${error.message}`);
+    debugLog(`✗ Cookie extraction error: ${error.message}`);
   }
 
+  debugLog(`✗ No cookie found`);
   return null;
 }
 
@@ -180,12 +228,21 @@ function extractCookieFromHeaders(response) {
 function extractUuidFromBody(body) {
   try {
     const uuidMatch = body.match(/"uuid":\s*"([a-f0-9\-]{36})"/i);
-    if (uuidMatch) return 'user_uuid=' + uuidMatch[1];
+    if (uuidMatch) {
+      debugLog(`✓ UUID found in body (uuid field)`);
+      return 'user_uuid=' + uuidMatch[1];
+    }
 
     const userUuidMatch = body.match(/"user_uuid":\s*"([^"]+)"/i);
-    if (userUuidMatch) return 'user_uuid=' + userUuidMatch[1];
-  } catch (error) {}
+    if (userUuidMatch) {
+      debugLog(`✓ UUID found in body (user_uuid field)`);
+      return 'user_uuid=' + userUuidMatch[1];
+    }
+  } catch (error) {
+    debugLog(`✗ Body UUID extraction error: ${error.message}`);
+  }
 
+  debugLog(`✗ No UUID found in body`);
   return null;
 }
 
@@ -198,6 +255,8 @@ function extractUuidFromBody(body) {
  * @returns {Promise} Response object
  */
 async function callAction(action, payload, cookie, referrer) {
+  debugLog(`📤 Calling action: ${action}`);
+  
   const headers = {
     'User-Agent': BASE_HEADERS['User-Agent'],
     'Accept': BASE_HEADERS['Accept'],
@@ -206,7 +265,10 @@ async function callAction(action, payload, cookie, referrer) {
     'Referer': referrer || MAIN_URL + '/'
   };
 
-  if (cookie) headers['cookie'] = cookie;
+  if (cookie) {
+    headers['cookie'] = cookie;
+    debugLog(`✓ Cookie added to headers`);
+  }
 
   const bodyContent = typeof payload === 'string' ? payload : JSON.stringify(payload);
 
@@ -218,11 +280,14 @@ async function callAction(action, payload, cookie, referrer) {
     }, 20000);
 
     if (!response.ok) {
+      debugLog(`✗ HTTP error: ${response.status}`);
       throw new Error(`HTTP ${response.status}`);
     }
 
+    debugLog(`✓ Action response OK`);
     return response;
   } catch (error) {
+    debugLog(`✗ Action call failed: ${error.message}`);
     throw error;
   }
 }
@@ -232,6 +297,8 @@ async function callAction(action, payload, cookie, referrer) {
  * @returns {Promise<string|null>} User UUID cookie or null
  */
 async function resetQuota() {
+  debugLog(`🔄 Resetting quota...`);
+  
   let randomId = '';
   const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=';
 
@@ -248,15 +315,23 @@ async function resetQuota() {
   );
 
   const userCookie = extractCookieFromHeaders(response);
-  if (userCookie) return userCookie;
+  if (userCookie) {
+    debugLog(`✓ Quota reset successful, cookie obtained`);
+    return userCookie;
+  }
 
   try {
     const body = await response.text();
     const bodyUuid = extractUuidFromBody(body);
-    if (bodyUuid) return bodyUuid;
-  } catch (error) {}
+    if (bodyUuid) {
+      debugLog(`✓ UUID extracted from response body`);
+      return bodyUuid;
+    }
+  } catch (error) {
+    debugLog(`✗ Failed to read response body: ${error.message}`);
+  }
 
-  console.error(`[${PROVIDER_NAME}] No user_uuid found in headers or body`);
+  debugLog(`✗ No user_uuid found in headers or body`);
   return null;
 }
 
@@ -268,19 +343,24 @@ async function resetQuota() {
  * @returns {Promise<array>} Search results
  */
 async function searchCineMM(query, type, cookie) {
+  debugLog(`🔎 Searching CinemM: "${query}" (type: ${type})`);
+  
   const payload = JSON.stringify([query, type]);
   const url = MAIN_URL + '/search?q=' + encodeURIComponent(query) + '&type=' + type;
 
   const response = await callAction(ACTIONS.search, payload, cookie, url);
   const body = await response.text();
+  
+  debugLog(`📄 Response body length: ${body.length} chars`);
+  
   const results = tryExtractJsonValue(body, '1:[');
 
   if (!results || !Array.isArray(results)) {
-    console.error(`[${PROVIDER_NAME}] Invalid search results`);
+    debugLog(`✗ Invalid search results`);
     return [];
   }
 
-  console.log(`[${PROVIDER_NAME}] Found ${results.length} results`);
+  debugLog(`✓ Found ${results.length} search results`, { results: results.slice(0, 3) });
   return results;
 }
 
@@ -291,6 +371,8 @@ async function searchCineMM(query, type, cookie) {
  * @returns {Promise<object>} Server information
  */
 async function getMovieServers(mediaId, cookie) {
+  debugLog(`🎬 Getting movie servers for ID: ${mediaId}`);
+  
   const payload = JSON.stringify([[mediaId]]);
   const response = await callAction(
     ACTIONS.movieServers,
@@ -303,11 +385,11 @@ async function getMovieServers(mediaId, cookie) {
   const servers = tryExtractJsonValue(body, '1:0:{');
 
   if (!servers || !servers.sources) {
-    console.error(`[${PROVIDER_NAME}] No movie servers found`);
+    debugLog(`✗ No movie servers found`);
     return null;
   }
 
-  console.log(`[${PROVIDER_NAME}] Found ${servers.sources.length} sources`);
+  debugLog(`✓ Found ${servers.sources.length} movie sources`, { sources: servers.sources.slice(0, 2) });
   return servers;
 }
 
@@ -318,6 +400,8 @@ async function getMovieServers(mediaId, cookie) {
  * @returns {Promise<object>} Series details
  */
 async function getSeriesDetails(mediaId, cookie) {
+  debugLog(`📺 Getting series details for ID: ${mediaId}`);
+  
   const payload = JSON.stringify([[mediaId]]);
   const response = await callAction(
     ACTIONS.seriesDetails,
@@ -330,11 +414,11 @@ async function getSeriesDetails(mediaId, cookie) {
   const details = tryExtractJsonValue(body, '1:0:{');
 
   if (!details || !details.seasons) {
-    console.error(`[${PROVIDER_NAME}] No series details found`);
+    debugLog(`✗ No series details found`);
     return null;
   }
 
-  console.log(`[${PROVIDER_NAME}] Found ${details.seasons.length} seasons`);
+  debugLog(`✓ Found ${details.seasons.length} seasons`);
   return details;
 }
 
@@ -345,6 +429,8 @@ async function getSeriesDetails(mediaId, cookie) {
  * @returns {Promise<object>} Episode servers
  */
 async function getEpisodeServers(episodeId, cookie) {
+  debugLog(`🎞️ Getting episode servers for ID: ${episodeId}`);
+  
   const payload = JSON.stringify([[episodeId]]);
   const response = await callAction(
     ACTIONS.episodeServers,
@@ -357,11 +443,11 @@ async function getEpisodeServers(episodeId, cookie) {
   const servers = tryExtractJsonValue(body, '1:0:{');
 
   if (!servers || !servers.servers) {
-    console.error(`[${PROVIDER_NAME}] Episode servers: no data`);
+    debugLog(`✗ No episode servers found`);
     return null;
   }
 
-  console.log(`[${PROVIDER_NAME}] Found ${servers.servers.length} servers`);
+  debugLog(`✓ Found ${servers.servers.length} episode servers`);
   return servers;
 }
 
@@ -372,6 +458,8 @@ async function getEpisodeServers(episodeId, cookie) {
  * @returns {Promise<object>} TMDB metadata
  */
 async function getTMDBInfo(tmdbId, type) {
+  debugLog(`🔍 Resolving TMDB info for: ${tmdbId} (${type})`);
+  
   const idString = String(tmdbId).charAt(0);
   const isValidId = /^\d+$/.test(idString);
   const contentType = type === 'tv' || type === 'series' ? 'tv' : 'movie';
@@ -379,7 +467,7 @@ async function getTMDBInfo(tmdbId, type) {
 
   try {
     if (isValidId) {
-      console.log(`[${PROVIDER_NAME}] Resolving via TMDB...`);
+      debugLog(`✓ Valid numeric ID format`);
       const response = await fetchWithTimeout(
         `https://api.themoviedb.org/3/${urlType}/${tmdbId}${contentType}?external_source=imdb_id&api_key=${TMDB_API_KEY}`,
         {
@@ -393,6 +481,7 @@ async function getTMDBInfo(tmdbId, type) {
 
         if (movie && movie.length > 0) {
           const item = movie[0];
+          debugLog(`✓ Found via TMDB:`, { title: item.title || item.name });
           return {
             id: item.id,
             title: contentType === 'tv' ? item.name : item.title,
@@ -401,7 +490,8 @@ async function getTMDBInfo(tmdbId, type) {
           };
         }
       }
-      console.error(`[${PROVIDER_NAME}] TMDB find failed, trying CinemMeta...`);
+      
+      debugLog(`ℹ️ TMDB lookup failed, trying CinemMeta...`);
 
       const cinemataResponse = await fetchWithTimeout(
         `https://v3-cinemeta.strem.io/meta/${urlType}/${tmdbId}`,
@@ -413,6 +503,7 @@ async function getTMDBInfo(tmdbId, type) {
       if (cinemataResponse.ok) {
         const cinemataData = await cinemataResponse.json();
         if (cinemataData.meta) {
+          debugLog(`✓ Found via CinemMeta:`, { title: cinemataData.meta.name || cinemataData.meta.title });
           return {
             id: tmdbId,
             title: cinemataData.meta.name || cinemataData.meta.title || tmdbId,
@@ -420,46 +511,19 @@ async function getTMDBInfo(tmdbId, type) {
             type: urlType
           };
         }
-        return {
-          id: tmdbId,
-          title: tmdbId,
-          year: null,
-          type: urlType
-        };
       }
-    } else {
-      // Try Cinemata directly
-      const response = await fetchWithTimeout(
-        `https://v3-cinemeta.strem.io/meta/${contentType}/${tmdbId}`,
-        {
-          headers: { 'User-Agent': BASE_HEADERS['User-Agent'] }
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          id: data.id,
-          title: contentType === 'tv' ? data.name : data.title,
-          year: (data.first_air_date || data.release_date || '').split('-')[0],
-          type: urlType
-        };
-      }
-      return {
-        id: tmdbId,
-        title: tmdbId,
-        year: null,
-        type: urlType
-      };
     }
   } catch (error) {
-    return {
-      id: tmdbId,
-      title: String(tmdbId),
-      year: null,
-      type: urlType
-    };
+    debugLog(`✗ Error resolving TMDB: ${error.message}`);
   }
+
+  debugLog(`⚠️ Could not resolve full metadata, using fallback`);
+  return {
+    id: tmdbId,
+    title: String(tmdbId),
+    year: null,
+    type: urlType
+  };
 }
 
 /**
@@ -535,6 +599,8 @@ function normalizeQuality(quality) {
 function deduplicateStreams(streams) {
   if (!streams || !Array.isArray(streams)) return [];
   
+  debugLog(`🔀 Deduplicating ${streams.length} streams...`);
+  
   const qualityMap = {};
 
   for (let i = 0; i < streams.length; i++) {
@@ -555,6 +621,7 @@ function deduplicateStreams(streams) {
     }
   }
 
+  debugLog(`✓ Deduplicated to ${unique.length} streams`);
   return unique;
 }
 
@@ -670,7 +737,12 @@ function formatStreamDescription(stream) {
  * @returns {array} Formatted stream array
  */
 function buildStreamsFromServers(servers, mediaInfo = {}) {
-  if (!servers || !Array.isArray(servers)) return [];
+  if (!servers || !Array.isArray(servers)) {
+    debugLog(`✗ Invalid servers array`);
+    return [];
+  }
+
+  debugLog(`🔨 Building ${servers.length} stream objects...`);
 
   const processed = {};
   const streams = [];
@@ -706,6 +778,8 @@ function buildStreamsFromServers(servers, mediaInfo = {}) {
     streams.push(streamObj);
   }
 
+  debugLog(`✓ Created ${streams.length} stream objects`);
+
   // Remove duplicates (one per quality), then sort by quality
   const deduped = deduplicateStreams(streams);
   const sorted = sortByQuality(deduped);
@@ -716,6 +790,7 @@ function buildStreamsFromServers(servers, mediaInfo = {}) {
     sorted[i].description = formatStreamDescription(sorted[i]);
   }
 
+  debugLog(`✓ Final streams: ${sorted.length}`, { streams: sorted.map(s => s.name) });
   return sorted;
 }
 
@@ -728,33 +803,39 @@ function buildStreamsFromServers(servers, mediaInfo = {}) {
  * @returns {Promise<array>} Available streams
  */
 async function getStreams(id, type, season, episode) {
+  console.log('\n═══════════════════════════════════════');
+  debugLog(`▶️  START: getStreams(${id}, ${type}, S${season}E${episode})`);
+  console.log('═══════════════════════════════════════\n');
+  
   try {
-    console.log(`[${PROVIDER_NAME}] Searching: ${id}, type=${type}, E=${episode}`);
-
     const isTV = type === 'tv' || type === 'series';
     const typeStr = isTV ? 'tv' : 'movie';
     const typeValue = isTV ? 'series' : 'movie';
 
+    debugLog(`📋 Parameters:`, { id, type: typeStr, season, episode });
+
     const tmdbInfo = await getTMDBInfo(id, isTV);
     if (!tmdbInfo || !tmdbInfo.title) {
-      console.error(`[${PROVIDER_NAME}] Could not resolve media info`);
+      debugLog(`✗ Could not resolve media info`);
       return [];
     }
 
-    console.log(`[${PROVIDER_NAME}] Resolved: ${tmdbInfo.title} (ID:${tmdbInfo.id})`);
+    debugLog(`✓ Resolved media:`, { title: tmdbInfo.title, year: tmdbInfo.year, id: tmdbInfo.id });
 
     let bestMatch = null;
     let bestScore = 0;
 
     const resetCookie = await resetQuota();
     if (!resetCookie) {
-      console.error(`[${PROVIDER_NAME}] Failed to get quota`);
+      debugLog(`✗ Failed to get session cookie`);
       return [];
     }
 
+    debugLog(`✓ Session cookie obtained`);
+
     const searchResults = await searchCineMM(tmdbInfo.title, typeValue, resetCookie);
     if (!searchResults || searchResults.length === 0) {
-      console.error(`[${PROVIDER_NAME}] No results for: ${tmdbInfo.title}`);
+      debugLog(`✗ No search results for: ${tmdbInfo.title}`);
       return [];
     }
 
@@ -767,6 +848,8 @@ async function getStreams(id, type, season, episode) {
         resultScore -= 0.5;
       }
 
+      debugLog(`  - "${result.name}" | Score: ${resultScore.toFixed(2)}`);
+
       if (resultScore > bestScore && resultScore >= 0.4) {
         bestScore = resultScore;
         bestMatch = result;
@@ -774,22 +857,22 @@ async function getStreams(id, type, season, episode) {
     }
 
     if (!bestMatch) {
-      console.error(`[${PROVIDER_NAME}] No match found (Score threshold: 0.4)`);
+      debugLog(`✗ No match found (threshold: 0.4)`);
       return [];
     }
 
-    console.log(
-      `[${PROVIDER_NAME}] Matched: ${bestMatch.name} (ID:${bestMatch.id}, Score:${bestScore.toFixed(2)})`
-    );
+    debugLog(`✓ Best match:`, { name: bestMatch.name, score: bestScore.toFixed(2), id: bestMatch.id });
 
     let streams = [];
 
     if (isTV) {
       const seriesDetails = await getSeriesDetails(bestMatch.id, resetCookie);
       if (!seriesDetails || !seriesDetails.seasons) {
-        console.error(`[${PROVIDER_NAME}] Could not fetch series details`);
+        debugLog(`✗ Could not fetch series details`);
         return [];
       }
+
+      debugLog(`✓ Series has ${seriesDetails.seasons.length} seasons`);
 
       let seasonId = null;
       for (let i = 0; i < seriesDetails.seasons.length; i++) {
@@ -808,18 +891,22 @@ async function getStreams(id, type, season, episode) {
       }
 
       if (!seasonId) {
-        console.log(`[${PROVIDER_NAME}] Season ${season} not found`);
+        debugLog(`✗ Season ${season} not found`);
         return [];
       }
 
-      console.log(`[${PROVIDER_NAME}] Episode: S${season}E${episode}`);
+      debugLog(`✓ Found season ${season}`);
 
       let episodeId = null;
       const seasonIndex = seriesDetails.seasons.findIndex(s => s.id === seasonId);
       if (seasonIndex >= 0) {
+        debugLog(`ℹ️ Season index: ${seasonIndex}`);
+        debugLog(`ℹ️ Episodes in season: ${seriesDetails.seasons[seasonIndex].episodes.length}`);
+        
         for (let i = 0; i < seriesDetails.seasons[seasonIndex].episodes.length; i++) {
           if (seriesDetails.seasons[seasonIndex].episodes[i].episode_number === parseInt(episode)) {
             episodeId = seriesDetails.seasons[seasonIndex].episodes[i].id;
+            debugLog(`✓ Found episode ${episode} by number match`);
             break;
           }
         }
@@ -828,32 +915,43 @@ async function getStreams(id, type, season, episode) {
           const episodeIndex = parseInt(episode) - 1;
           if (episodeIndex >= 0 && episodeIndex < seriesDetails.seasons[seasonIndex].episodes.length) {
             episodeId = seriesDetails.seasons[seasonIndex].episodes[episodeIndex].id;
+            debugLog(`✓ Found episode ${episode} by index`);
           }
         }
       }
 
       if (!episodeId) {
-        console.log(`[${PROVIDER_NAME}] Episode ${episode} not found`);
+        debugLog(`✗ Episode ${episode} not found`);
         return [];
       }
 
-      console.log(`[${PROVIDER_NAME}] Fetching: ${episodeId} (S${season}E${episode})`);
-
+      debugLog(`ℹ️ Fetching episode servers...`);
       const episodeServers = await getEpisodeServers(episodeId, resetCookie);
       if (episodeServers && episodeServers.servers) {
         streams = buildStreamsFromServers(episodeServers.servers, tmdbInfo);
+      } else {
+        debugLog(`✗ No episode servers returned`);
       }
     } else {
+      debugLog(`ℹ️ Fetching movie servers...`);
       const movieServers = await getMovieServers(bestMatch.id, resetCookie);
       if (movieServers && movieServers.sources) {
         streams = buildStreamsFromServers(movieServers.sources, tmdbInfo);
+      } else {
+        debugLog(`✗ No movie servers returned`);
       }
     }
 
-    console.log(`[${PROVIDER_NAME}] Returned ${streams.length} streams`);
+    console.log('\n══════════════���════════════════════════');
+    debugLog(`✓ COMPLETE: Returning ${streams.length} streams`);
+    console.log('═══════════════════════════════════════\n');
+    
     return streams;
   } catch (error) {
-    console.error(`[${PROVIDER_NAME}] Error: ${error.message}`);
+    console.log('\n═══════════════════════════════════════');
+    debugLog(`✗ ERROR: ${error.message}`);
+    console.error(error);
+    console.log('═══════════════════════════════════════\n');
     return [];
   }
 }
