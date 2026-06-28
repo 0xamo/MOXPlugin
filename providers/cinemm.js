@@ -8,7 +8,6 @@
  * - Quality normalization (480p, 720p, 1080p, 2160p, etc.)
  * - User session quota management
  * - TMDB metadata resolution as fallback
- * - Duplicate removal and quality-based sorting
  */
 
 const PROVIDER_NAME = 'CinemM';
@@ -28,18 +27,6 @@ const BASE_HEADERS = {
   'Accept': 'text/x-component',
   'Content-Type': 'text/plain;charset=UTF-8',
   'Referer': MAIN_URL + '/'
-};
-
-// Quality ranking for sorting (higher = better)
-const QUALITY_RANKING = {
-  '4K': 5,
-  '2160p': 5,
-  '1440p': 4,
-  '1080p': 3,
-  '720p': 2,
-  '480p': 1,
-  'HD': 1,
-  'SD': 0
 };
 
 /**
@@ -529,135 +516,11 @@ function normalizeQuality(quality) {
 }
 
 /**
- * Remove duplicate streams based on URL
- * @param {array} streams - Stream array
- * @returns {array} Deduplicated streams
- */
-function deduplicateStreams(streams) {
-  const seen = {};
-  const unique = [];
-
-  for (let i = 0; i < streams.length; i++) {
-    const stream = streams[i];
-    if (!seen[stream.url]) {
-      seen[stream.url] = true;
-      unique.push(stream);
-    }
-  }
-
-  return unique;
-}
-
-/**
- * Sort streams by quality (highest first)
- * @param {array} streams - Stream array
- * @returns {array} Sorted streams
- */
-function sortByQuality(streams) {
-  return streams.sort((a, b) => {
-    const rankA = QUALITY_RANKING[a.quality] || 0;
-    const rankB = QUALITY_RANKING[b.quality] || 0;
-    return rankB - rankA; // Highest quality first
-  });
-}
-
-/**
- * Format stream name using template
- * @param {object} stream - Stream object
- * @returns {string} Formatted name
- */
-function formatStreamName(stream) {
-  // Format: [Provider] [Quality] [Server Name]
-  const parts = [PROVIDER_NAME];
-  
-  if (stream.quality) {
-    parts.push(`[${stream.quality}]`);
-  }
-  
-  if (stream.serverName) {
-    parts.push(stream.serverName);
-  } else {
-    parts.push('Stream');
-  }
-
-  return parts.join(' ');
-}
-
-/**
- * Format stream description using template
- * @param {object} stream - Stream object
- * @returns {string} Formatted description
- */
-function formatStreamDescription(stream) {
-  const parts = [];
-
-  // First line: Title and metadata
-  if (stream.title) {
-    parts.push(`🎬 ${stream.title}`);
-    
-    if (stream.year) {
-      parts[0] += ` ${stream.year}`;
-    }
-  }
-
-  // Second line: Quality and codec info
-  const infoParts = [];
-  if (stream.quality) {
-    infoParts.push(`🎥 ${stream.quality}`);
-  }
-  if (stream.encode) {
-    infoParts.push(`🎞️ ${stream.encode}`);
-  }
-  if (stream.network) {
-    infoParts.push(`💿 ${stream.network}`);
-  }
-  
-  if (infoParts.length > 0) {
-    parts.push(infoParts.join(' '));
-  }
-
-  // Third line: Size and bitrate
-  const sizeParts = [];
-  if (stream.size) {
-    sizeParts.push(`💾 ${stream.size}`);
-  }
-  if (stream.duration) {
-    sizeParts.push(`⏱️ ${stream.duration}`);
-  }
-  if (stream.bitrate) {
-    sizeParts.push(`〽️ ${stream.bitrate}`);
-  }
-
-  if (sizeParts.length > 0) {
-    parts.push(sizeParts.join(' '));
-  }
-
-  // Fourth line: Seeders and metadata
-  const metaParts = [];
-  if (stream.seeders) {
-    metaParts.push(`👥 ${stream.seeders}`);
-  }
-  if (stream.indexer) {
-    metaParts.push(`🔍 ${stream.indexer}`);
-  }
-  if (stream.releaseGroup) {
-    metaParts.push(`🏷️ ${stream.releaseGroup}`);
-  }
-
-  if (metaParts.length > 0) {
-    parts.push(metaParts.join(' '));
-  }
-
-  return parts.join('\n');
-}
-
-/**
  * Build stream objects from server list
  * @param {array} servers - Server array from API
- * @param {object} mediaInfo - Media information
  * @returns {array} Formatted stream array
  */
-function buildStreamsFromServers(servers, mediaInfo = {}) {
+function buildStreamsFromServers(servers) {
   if (!servers || !Array.isArray(servers)) return [];
 
   const processed = {};
@@ -666,41 +529,25 @@ function buildStreamsFromServers(servers, mediaInfo = {}) {
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
 
-    if (!server || !server.url || processed[server.url]) continue;
-    processed[server.url] = true;
+    if (!server || !server.url || processed[server.id]) continue;
+    processed[server.id] = true;
 
     const quality = normalizeQuality(server.quality || '');
-    
-    const streamObj = {
+    const qualityLabel = server.quality ? ` (${server.quality})` : '';
+
+    streams.push({
+      name: PROVIDER_NAME + quality + qualityLabel,
+      title: (server.name || 'Unknown') + '\n' + quality + qualityLabel,
       url: server.url,
       quality: quality,
-      serverName: server.name || 'Unknown',
-      title: mediaInfo.title || 'Stream',
-      year: mediaInfo.year,
-      encode: server.encode,
-      network: server.network,
-      size: server.size,
-      duration: server.duration,
-      bitrate: server.bitrate,
-      seeders: server.seeders,
-      indexer: server.indexer,
-      releaseGroup: server.releaseGroup,
       headers: {
         'Referer': MAIN_URL + '/',
         'User-Agent': BASE_HEADERS['User-Agent']
       }
-    };
-
-    // Format name and description
-    streamObj.name = formatStreamName(streamObj);
-    streamObj.description = formatStreamDescription(streamObj);
-
-    streams.push(streamObj);
+    });
   }
 
-  // Remove duplicates and sort by quality
-  const deduped = deduplicateStreams(streams);
-  return sortByQuality(deduped);
+  return streams;
 }
 
 /**
@@ -815,12 +662,12 @@ async function getStreams(id, type, season, episode) {
 
       const episodeServers = await getEpisodeServers(episodeId, resetCookie);
       if (episodeServers && episodeServers.servers) {
-        streams = buildStreamsFromServers(episodeServers.servers, tmdbInfo);
+        streams = buildStreamsFromServers(episodeServers.servers);
       }
     } else {
       const movieServers = await getMovieServers(bestMatch.id, resetCookie);
       if (movieServers && movieServers.sources) {
-        streams = buildStreamsFromServers(movieServers.sources, tmdbInfo);
+        streams = buildStreamsFromServers(movieServers.sources);
       }
     }
 
